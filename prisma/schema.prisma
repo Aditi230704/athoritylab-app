@@ -1,0 +1,452 @@
+// AthorityLab — Prisma 7 schema
+// Client generates to: app/generated/prisma
+// DB url lives in: prisma.config.ts → process.env.DATABASE_URL
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum Plan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum Stage {
+  IDEA
+  PRE_SEED
+  SEED
+  SERIES_A
+  SERIES_B
+  SERIES_C_PLUS
+  BOOTSTRAPPED
+  GROWTH
+}
+
+enum Platform {
+  LINKEDIN
+  TWITTER
+  REDDIT
+  INSTAGRAM
+  YOUTUBE
+  SUBSTACK
+}
+
+enum OpportunityType {
+  GRANT
+  ACCELERATOR
+  FELLOWSHIP
+  PODCAST_SLOT
+  SPEAKING
+  PRESS
+  PARTNERSHIP
+  EVENT
+  COMPETITION
+}
+
+enum MatchStatus {
+  SUGGESTED
+  SAVED
+  INTRO_REQUESTED
+  INTRO_SENT
+  MEETING_SCHEDULED
+  PASSED
+}
+
+enum IntroStatus {
+  PENDING
+  SENT
+  RESPONDED
+  DECLINED
+}
+
+enum InvestorRole {
+  FOUNDER
+  GENERAL_PARTNER
+  MANAGING_PARTNER
+  PARTNER
+  PRINCIPAL
+  ASSOCIATE
+  ANGEL
+  SCOUT
+  FAMILY_OFFICE
+  CVC
+}
+
+// ─────────────────────────────────────────────
+// USER — the auth entity
+// ─────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  phone     String?
+  plan      Plan     @default(FREE)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  founder       Founder?
+  introRequests IntroRequest[]
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// FOUNDER — extended profile
+// ─────────────────────────────────────────────
+
+model Founder {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Startup info
+  startupName String?
+  stage       Stage?
+  industries  String[]
+  location    String?
+  country     String?
+  bio         String?
+  website     String?
+
+  // Social handles
+  linkedinUrl     String?
+  twitterHandle   String?
+  redditUsername  String?
+
+  // Cached scores (refreshed async)
+  visibilityScore Float?
+  readinessScore  Float?
+  lastScoredAt    DateTime?
+
+  // Relations
+  startup          Startup?
+  socialMetrics    SocialMetrics[]
+  visibilityScores VisibilityScore[]
+  readinessScores  ReadinessScore[]
+  investorMatches  InvestorMatch[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("founders")
+}
+
+// ─────────────────────────────────────────────
+// STARTUP — company data attached to a founder
+// ─────────────────────────────────────────────
+
+model Startup {
+  id        String  @id @default(cuid())
+  founderId String  @unique
+  founder   Founder @relation(fields: [founderId], references: [id], onDelete: Cascade)
+
+  name          String
+  description   String?
+  website       String?
+  stage         Stage?
+  industries    String[]
+  targetMarket  String?
+  revenueModel  String?
+  teamSize      Int?
+  mrr           Float?   // monthly recurring revenue (USD)
+  arr           Float?   // annual recurring revenue
+  fundingRaised Float?   // total raised (USD)
+  hasProduct    Boolean  @default(false)
+  hasRevenue    Boolean  @default(false)
+  hasAdvisors   Boolean  @default(false)
+  advisorCount  Int      @default(0)
+  userCount     Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("startups")
+}
+
+// ─────────────────────────────────────────────
+// INVESTOR FIRM
+// ─────────────────────────────────────────────
+
+model InvestorFirm {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  website     String?
+  logoUrl     String?
+  description String?
+  aum         Float?   // Assets under management (USD M)
+  foundedYear Int?
+  locations   String[]
+
+  focusStages      Stage[]
+  focusIndustries  String[]
+  notablePortfolio String[]
+
+  investors Investor[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("investor_firms")
+}
+
+// ─────────────────────────────────────────────
+// INVESTOR — the core discovery database
+// ─────────────────────────────────────────────
+
+model Investor {
+  id  String @id @default(cuid())
+
+  // Identity
+  name            String
+  email           String?
+  linkedinUrl     String?
+  twitterHandle   String?
+  profileImageUrl String?
+
+  // Firm
+  firmId String?
+  firm   InvestorFirm? @relation(fields: [firmId], references: [id])
+  role   InvestorRole  @default(PARTNER)
+
+  // Investment thesis
+  stages       Stage[]
+  industries   String[]
+  geographies  String[]
+  checkSizeMin Float?   // USD
+  checkSizeMax Float?   // USD
+  currency     String   @default("USD")
+
+  // Activity signals
+  portfolioCount Int?
+  lastActiveAt   DateTime?
+  isActive       Boolean  @default(true)
+  warmthScore    Float    @default(50) // 0–100: how reachable
+
+  // Text fields used for AI / search
+  bio        String?
+  thesisText String?
+
+  // Source tracking
+  source     String?   // "crunchbase" | "linkedin" | "manual" | "twitter"
+  sourceId   String?   // external ID
+  verifiedAt DateTime?
+
+  // Relations
+  matches            InvestorMatch[]
+  portfolioCompanies InvestorPortfolio[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([checkSizeMin, checkSizeMax])
+  @@map("investors")
+}
+
+// ─────────────────────────────────────────────
+// INVESTOR PORTFOLIO — companies they've backed
+// ─────────────────────────────────────────────
+
+model InvestorPortfolio {
+  id         String   @id @default(cuid())
+  investorId String
+  investor   Investor @relation(fields: [investorId], references: [id], onDelete: Cascade)
+
+  company   String
+  stage     Stage?
+  year      Int?
+  exited    Boolean @default(false)
+  exitValue Float?  // USD M
+
+  createdAt DateTime @default(now())
+
+  @@map("investor_portfolio")
+}
+
+// ─────────────────────────────────────────────
+// INVESTOR MATCH — AI-computed founder↔investor fit
+// ─────────────────────────────────────────────
+
+model InvestorMatch {
+  id         String   @id @default(cuid())
+  founderId  String
+  founder    Founder  @relation(fields: [founderId], references: [id], onDelete: Cascade)
+  investorId String
+  investor   Investor @relation(fields: [investorId], references: [id], onDelete: Cascade)
+
+  score       Float       // 0–100 overall fit
+  reasons     String[]    // bullet-point reasons
+  warmthPath  String?     // e.g. "You both follow @naval on Twitter"
+  aiRationale String?     // GPT-generated paragraph
+  status      MatchStatus @default(SUGGESTED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([founderId, investorId])
+  @@index([founderId, score])
+  @@map("investor_matches")
+}
+
+// ─────────────────────────────────────────────
+// INTRO REQUEST
+// ─────────────────────────────────────────────
+
+model IntroRequest {
+  id         String      @id @default(cuid())
+  userId     String
+  user       User        @relation(fields: [userId], references: [id])
+  investorId String
+  status     IntroStatus @default(PENDING)
+  message    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("intro_requests")
+}
+
+// ─────────────────────────────────────────────
+// VISIBILITY SCORE — computed per founder
+// ─────────────────────────────────────────────
+
+model VisibilityScore {
+  id        String  @id @default(cuid())
+  founderId String
+  founder   Founder @relation(fields: [founderId], references: [id], onDelete: Cascade)
+
+  // Overall
+  total Float // 0–100
+
+  // 5 axes (each 0–20)
+  findability  Float // Google search presence, SEO signals
+  credibility  Float // Profile completeness, verified signals
+  consistency  Float // Posting cadence across platforms
+  reach        Float // Audience size + engagement rate
+  sentiment    Float // Tone quality + community reception
+
+  // Raw inputs & outputs
+  signals         Json // Raw data that produced the score
+  recommendations Json // Prioritised action list
+
+  createdAt DateTime @default(now())
+
+  @@index([founderId, createdAt])
+  @@map("visibility_scores")
+}
+
+// ─────────────────────────────────────────────
+// READINESS SCORE — startup investor-readiness
+// ─────────────────────────────────────────────
+
+model ReadinessScore {
+  id        String  @id @default(cuid())
+  founderId String
+  founder   Founder @relation(fields: [founderId], references: [id], onDelete: Cascade)
+
+  // Overall
+  total Float // 0–100
+
+  // 5 axes (each 0–20)
+  teamStrength     Float
+  productMaturity  Float
+  marketClarity    Float
+  tractionEvidence Float
+  narrativeQuality Float
+
+  // Inputs & outputs
+  signals    Json    // Form inputs used
+  fixList    Json    // 3-week prioritised action plan
+  aiInsights String? // GPT narrative paragraph
+
+  createdAt DateTime @default(now())
+
+  @@index([founderId, createdAt])
+  @@map("readiness_scores")
+}
+
+// ─────────────────────────────────────────────
+// SOCIAL METRICS — cached platform stats
+// ─────────────────────────────────────────────
+
+model SocialMetrics {
+  id        String   @id @default(cuid())
+  founderId String
+  founder   Founder  @relation(fields: [founderId], references: [id], onDelete: Cascade)
+  platform  Platform
+
+  followers      Int?
+  following      Int?
+  posts          Int?
+  avgEngagement  Float? // %
+  postingCadence Float? // posts / week
+  lastPostAt     DateTime?
+  topContent     Json?  // sample high-performing posts
+
+  fetchedAt DateTime @default(now())
+
+  @@unique([founderId, platform])
+  @@map("social_metrics")
+}
+
+// ─────────────────────────────────────────────
+// OPPORTUNITY — grants, accelerators, podcasts
+// ─────────────────────────────────────────────
+
+model Opportunity {
+  id String @id @default(cuid())
+
+  title       String
+  description String
+  type        OpportunityType
+
+  // Targeting
+  stages      Stage[]
+  industries  String[]
+  geographies String[]
+
+  // Meta
+  provider  String
+  url       String?
+  deadline  DateTime?
+  value     String?   // e.g. "$50K grant" or "Equity-free"
+
+  isLive    Boolean @default(true)
+  isPremium Boolean @default(false) // Pro-only
+
+  postedAt  DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type, isLive])
+  @@map("opportunities")
+}
+
+// ─────────────────────────────────────────────
+// COMMUNITY ROOM
+// ─────────────────────────────────────────────
+
+model CommunityRoom {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  color       String?
+  memberCount Int     @default(0)
+  onlineNow   Int     @default(0)
+  latestTopic String?
+  isActive    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  @@map("community_rooms")
+}
